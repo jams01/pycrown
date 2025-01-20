@@ -5,7 +5,7 @@ Copyright: 2018, Jan Zörner
 Licence: GNU GPLv3
 """
 
-from numba import jit, float32, int32, float_
+from numba import jit, float32, int32, float64
 import numpy as np
 
 
@@ -61,7 +61,7 @@ def get_neighbourhood(radius):
     return neighbours_x, neighbours_y, breaks
 
 
-@jit(int32[:, :](float32[:, :], int32[:, :], float_, float_, float_, float_),
+@jit(int32[:, :](float32[:, :], int32[:, :], float64, float64, float64, float64),
      nopython=True, nogil=True, parallel=False)
 def _crown_dalponteCIRC(Chm, Trees, th_seed, th_crown, th_tree, max_crown):
     '''

@@ -17,18 +17,22 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
+import rasterio
+from rasterio.transform import from_origin
+from rasterio.crs import CRS
+
 import scipy.ndimage as ndimage
 import scipy.ndimage.filters as filters
 from scipy.spatial.distance import cdist
 
-from skimage.morphology import watershed
+from skimage.segmentation import watershed
 from skimage.filters import threshold_otsu
 # from skimage.feature import peak_local_max
 
-import gdal
-import osr
+from osgeo import gdal
+from osgeo import osr
 
-from shapely.geometry import mapping, Point, Polygon
+from shapely.geometry import mapping, Point, Polygon, GeometryCollection, LineString, Point
 
 from rasterio.features import shapes as rioshapes
 
@@ -127,7 +131,12 @@ class PyCrown:
         self.resolution = abs(self.geotransform[-1])
         self.ul_lon = chm_gdal.GetGeoTransform()[0]
         self.ul_lat = chm_gdal.GetGeoTransform()[3]
-        self.chm0 = chm_gdal.GetRasterBand(1).ReadAsArray()
+        try:
+            self.chm0 = chm_gdal.GetRasterBand(1).ReadAsArray()
+        except:
+            with rasterio.open(self.chm_file) as src:
+                # Leer el raster como un array de NumPy
+                self.chm0 = src.read(1)
         chm_gdal = None
 
 
@@ -137,7 +146,13 @@ class PyCrown:
         except RuntimeError as e:
             raise IOError(e)
         dtm_gdal = gdal.Open(str(self.dtm_file), gdal.GA_ReadOnly)
-        self.dtm = dtm_gdal.GetRasterBand(1).ReadAsArray()
+        try:
+            self.dtm = dtm_gdal.GetRasterBand(1).ReadAsArray()
+        except:
+            with rasterio.open(self.dtm_file) as src:
+                # Leer el raster como un array de NumPy
+                self.dtm = src.read(1)
+        
         dtm_gdal = None
 
         # Load the DSM
@@ -145,8 +160,15 @@ class PyCrown:
             self.dsm_file = Path(dsm_file)
         except RuntimeError as e:
             raise IOError(e)
-        dsm_gdal = gdal.Open(str(self.dsm_file), gdal.GA_ReadOnly)
-        self.dsm = dsm_gdal.GetRasterBand(1).ReadAsArray()
+        
+        #self.dsm = dsm_gdal.GetRasterBand(1).ReadAsArray()
+        try:
+            dsm_gdal = gdal.Open(str(self.dsm_file), gdal.GA_ReadOnly)
+            self.dsm = dsm_gdal.GetRasterBand(1).ReadAsArray()
+        except:
+            with rasterio.open(self.dsm_file) as src:
+                # Leer el raster como un array de NumPy
+                self.dsm = src.read(1)
         dsm_gdal = None
 
         # Load the LiDAR point cloud
@@ -187,14 +209,17 @@ class PyCrown:
         fname :   str
                   Path to LiDAR dataset (.las or .laz-file)
         """
-        las = laspy.file.File(str(fname), mode='r')
-        lidar_points = np.array((
-            las.x, las.y, las.z, las.intensity, las.return_num,
-            las.classification
-        )).transpose()
-        colnames = ['x', 'y', 'z', 'intensity', 'return_num', 'classification']
-        self.las = pd.DataFrame(lidar_points, columns=colnames)
-        las.close()
+        with laspy.open(str(fname)) as las:
+            # Leer los puntos LIDAR
+            points = las.read()
+            # Convertir los datos a un array de numpy
+            lidar_points = np.array((
+            points.x, points.y, points.z, points.intensity, points.return_number,
+            points.classification
+            )).transpose()
+            # Crear un DataFrame de pandas
+            colnames = ['x', 'y', 'z', 'intensity', 'return_num', 'classification']
+            self.las = pd.DataFrame(lidar_points, columns=colnames)
 
     def _check_empty(self):
         """ Helper function raising an Exception if no trees present
@@ -548,7 +573,7 @@ class PyCrown:
         else:
             df = pd.DataFrame(np.array([trees, trees], dtype='object').T,
                               dtype='object', columns=['top_cor', 'top'])
-            self.trees = self.trees.append(df)
+            self.trees = pd.concat([self.trees, df], ignore_index=True)
 
         self._check_empty()
 
@@ -848,7 +873,7 @@ class PyCrown:
 
         print('Attach LiDAR points to corresponding crowns')
         lidar_in_crowns = gpd.sjoin(lidar_geodf, crown_geodf,
-                                    op='within', how="inner")
+                                    predicate='within', how="inner")
 
         lidar_tree_class = np.zeros(lidar_in_crowns['index_right'].size)
         lidar_tree_mask = np.zeros(lidar_in_crowns['index_right'].size,
@@ -863,7 +888,8 @@ class PyCrown:
             # check that not all values are the same
             if len(points.z) > 1 and not np.allclose(points.z,
                                                      points.iloc[0].z):
-                points = points[points.z >= threshold_otsu(points.z)]
+                z_values = np.array(points.z)
+                points = points[points.z >= threshold_otsu(z_values)]
                 if first_return:
                     points = points[points.return_num == 1]  # first returns
             hull = points.unary_union.convex_hull
@@ -876,21 +902,21 @@ class PyCrown:
             print('Classifying point cloud')
             lidar_in_crowns = lidar_in_crowns[lidar_tree_mask]
             lidar_tree_class = lidar_tree_class[lidar_tree_mask]
-            header = laspy.header.Header()
+            header = laspy.LasHeader(point_format=3, version="1.4")
             self.outpath.mkdir(parents=True, exist_ok=True)
-            outfile = laspy.file.File(
-                self.outpath / "trees.las", mode="w", header=header
-            )
-            xmin = np.floor(np.min(lidar_in_crowns.x))
-            ymin = np.floor(np.min(lidar_in_crowns.y))
-            zmin = np.floor(np.min(lidar_in_crowns.z))
-            outfile.header.offset = [xmin, ymin, zmin]
-            outfile.header.scale = [0.001, 0.001, 0.001]
-            outfile.x = lidar_in_crowns.x
-            outfile.y = lidar_in_crowns.y
-            outfile.z = lidar_in_crowns.z
-            outfile.intensity = lidar_tree_class
-            outfile.close()
+            with laspy.open(self.outpath / "trees.las", mode="w", header=header) as outfile:
+               # Compute the minimum values for offsets
+               xmin = np.floor(np.min(lidar_in_crowns.x))
+               ymin = np.floor(np.min(lidar_in_crowns.y))
+               zmin = np.floor(np.min(lidar_in_crowns.z))
+               # Set the header offsets and scales
+               outfile.header.offset = [xmin, ymin, zmin]
+               outfile.header.scale = [0.001, 0.001, 0.001]
+               # Create the point records
+               outfile.x = lidar_in_crowns.x
+               outfile.y = lidar_in_crowns.y
+               outfile.z = lidar_in_crowns.z
+               outfile.intensity = lidar_tree_class
 
         self.lidar_in_crowns = lidar_in_crowns
 
@@ -967,18 +993,49 @@ class PyCrown:
             'properties': {'DN': 'int', 'TTH': 'float', 'TCH': 'float'}
         }
         with fiona.collection(
-            str(outfile), 'w', 'ESRI Shapefile',
-            schema, crs=self.srs
+                str(outfile), 'w', 'ESRI Shapefile',
+                schema, crs=self.srs
         ) as output:
             for tidx in range(len(self.trees)):
                 feat = {}
                 tree = self.trees.iloc[tidx]
-                feat['geometry'] = mapping(tree[crowntype])
+                
+                # Check and fix the geometry if needed
+                geometry = tree[crowntype]
+                if isinstance(geometry, GeometryCollection):
+                    if len(geometry.geoms) > 0:
+                        # Extract the first Polygon geometry from the GeometryCollection
+                        #print(geometry.geoms)
+                        #geometry = geometry.geoms[0]  # Or handle as needed (e.g., take all polygons)
+                        for geom in geometry.geoms:
+                            feat['geometry'] = mapping(geom)
+                            feat['properties'] = {
+                                'DN': tidx,
+                                'TTH': float(tree.top_height),
+                                'TCH': float(tree.top_cor_height)
+                            }
+                            
+                            # Write the feature to the shapefile
+                            output.write(feat)
+                        continue
+                    else:
+                        # Handle case where the GeometryCollection is empty
+                        continue  # Skip this tree or add handling logic as necessary.
+                if isinstance(geometry, LineString):
+                    # Convert LineString to Polygon using a small buffer
+                    geometry = geometry.buffer(0.01)  # Adjust the buffer size as needed
+                if isinstance(geometry, Point):
+                    geometry = geometry.buffer(0.5)
+                
+                # Prepare feature with geometry and properties
+                feat['geometry'] = mapping(geometry)
                 feat['properties'] = {
                     'DN': tidx,
                     'TTH': float(tree.top_height),
                     'TCH': float(tree.top_cor_height)
                 }
+                
+                # Write the feature to the shapefile
                 output.write(feat)
 
     def export_raster(self, raster, fname, title, res=None):
@@ -999,21 +1056,48 @@ class PyCrown:
         res = res if res else self.resolution
 
         fname.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            driver = gdal.GetDriverByName('GTIFF')
+            y_pixels, x_pixels = raster.shape
+            gdal_file = driver.Create(
+                f'{fname}', x_pixels, y_pixels, 1, gdal.GDT_Float32
+            )
+            gdal_file.SetGeoTransform(
+                (self.ul_lon, res, 0., self.ul_lat, 0., -res)
+            )
+            dataset_srs = gdal.osr.SpatialReference()
+            dataset_srs.ImportFromEPSG(self.epsg)
+            gdal_file.SetProjection(dataset_srs.ExportToWkt())
+            band = gdal_file.GetRasterBand(1)
+            band.SetDescription(title)
+            band.SetNoDataValue(0.)
+            band.WriteArray(raster)
+            gdal_file.FlushCache()
+            gdal_file = None
+        except:
+            ul_lon = self.ul_lon
+            ul_lat = self.ul_lat
+            title = 'trees'  # Band description
+            epsg_code = self.epsg  # EPSG code for the coordinate system
+            # Define the transform (upper-left corner and pixel size)
+            transform = from_origin(ul_lon, ul_lat, res, res)  # (upper left x, upper left y, pixel size x, pixel size y)
+            # Open a new GeoTIFF file for writing
+            with rasterio.open(
+                f'{fname}', 'w', 
+                driver='GTiff', 
+                count=1, 
+                dtype='float32', 
+                width=raster.shape[1], 
+                height=raster.shape[0], 
+                crs=CRS.from_epsg(epsg_code),
+                transform=transform
+            ) as dst:
+                # Write the array to the file
+                dst.write(raster, 1)  # 1 refers to the first band
 
-        driver = gdal.GetDriverByName('GTIFF')
-        y_pixels, x_pixels = raster.shape
-        gdal_file = driver.Create(
-            f'{fname}', x_pixels, y_pixels, 1, gdal.GDT_Float32
-        )
-        gdal_file.SetGeoTransform(
-            (self.ul_lon, res, 0., self.ul_lat, 0., -res)
-        )
-        dataset_srs = gdal.osr.SpatialReference()
-        dataset_srs.ImportFromEPSG(self.epsg)
-        gdal_file.SetProjection(dataset_srs.ExportToWkt())
-        band = gdal_file.GetRasterBand(1)
-        band.SetDescription(title)
-        band.SetNoDataValue(0.)
-        band.WriteArray(raster)
-        gdal_file.FlushCache()
-        gdal_file = None
+                # Set the NoData value
+                dst.nodata = 0.0
+
+                # Set the band description (optional)
+                dst.descriptions = (title,)
+
