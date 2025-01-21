@@ -25,10 +25,11 @@ import scipy.ndimage as ndimage
 import scipy.ndimage.filters as filters
 from scipy.spatial.distance import cdist
 
-from skimage.segmentation import watershed
+from skimage.segmentation import felzenszwalb, slic, quickshift, watershed
 from skimage.filters import threshold_otsu
+from skimage.measure import label, regionprops
 # from skimage.feature import peak_local_max
-
+from scipy.ndimage import maximum_filter, label
 from osgeo import gdal
 from osgeo import osr
 
@@ -40,6 +41,7 @@ import fiona
 from fiona.crs import from_epsg
 
 import laspy
+from matplotlib import pyplot as plt
 
 try:
     from pycrown import _crown_dalponte_cython
@@ -182,6 +184,8 @@ class PyCrown:
         self.tree_markers = None
         self.tt_corrected = None
 
+        self.define_trees_df()
+    def define_trees_df(self):
         self.trees = pd.DataFrame(columns=[
             'top_height', 'top_elevation',
             'top_cor_height', 'top_cor_elevation',
@@ -200,7 +204,6 @@ class PyCrown:
             'top': 'object',
             'tt_corrected': 'int'
         })
-
     def _load_lidar_points_cloud(self, fname):
         """ Loads LiDAR dataset
 
@@ -343,6 +346,7 @@ class PyCrown:
                                np.array([tree.y for tree in self.trees[loc]]),
                                resolution).astype(np.int32)
 
+
     def _watershed(self, inraster, th_tree=15.):
         """ Simple implementation of a watershed tree crown delineation
 
@@ -363,6 +367,28 @@ class PyCrown:
         raster = inraster.copy()
         raster[np.isnan(raster)] = 0.
         labels = watershed(-raster, self.tree_markers, mask=inraster_mask)
+        return labels
+
+    def _slic(self, inraster, th_tree=15., n_segments=300):
+        """ Simple implementation of a slic tree crown delineation
+
+        Parameters
+        ----------
+        inraster :   ndarray
+                     raster of height values (e.g., CHM)
+        th_tree :    float
+                     minimum height of tree crown
+
+        Returns
+        -------
+        ndarray
+            raster of individual tree crowns
+        """
+        inraster_mask = inraster.copy()
+        inraster_mask[inraster <= th_tree] = 0
+        raster = inraster.copy()
+        raster[np.isnan(raster)] = 0.
+        labels = slic(raster, n_segments=n_segments, mask=inraster_mask, channel_axis=None)
         return labels
 
     def _screen_crowns(self, cond):
@@ -549,9 +575,11 @@ class PyCrown:
 
         # remove tree tops lower than minimum height
         tree_maxima[raster <= hmin] = 0
-
+        #distance = ndimage.distance_transform_edt(tree_maxima)
+        #separated_maxima = (distance == filters.maximum_filter(distance, size=3))
         # label each tree
         self.tree_markers, num_objects = ndimage.label(tree_maxima)
+        
 
         if num_objects == 0:
             raise NoTreesException
@@ -573,7 +601,75 @@ class PyCrown:
         else:
             df = pd.DataFrame(np.array([trees, trees], dtype='object').T,
                               dtype='object', columns=['top_cor', 'top'])
+            
             self.trees = pd.concat([self.trees, df], ignore_index=True)
+            print("len tree_detection", len(self.trees))
+
+        self._check_empty()
+
+    def reassign_disconnected_labels(self, crowns):
+        # Paso 1: Crear una copia del array de crowns para modificarlo sin alterar el original
+        labeled_array = np.copy(crowns)
+        
+        # Paso 2: Inicializar el máximo de etiquetas actuales en crowns
+        max_label = np.max(crowns)
+        
+        # Paso 3: Procesar cada label individualmente
+        for current_label in np.unique(crowns):
+            if current_label == 0:  # Ignorar el fondo (etiqueta 0)
+                continue
+            
+            # Paso 3.1: Extraer la región que corresponde al label actual
+            region_mask = (crowns == current_label)
+            
+            # Paso 3.2: Etiquetar los componentes conectados dentro de la región actual
+            labeled_region = label(region_mask)
+            #print(labeled_region[0])
+            # Paso 3.3: Obtener las propiedades de las regiones conectadas
+            cont=0
+            for region in regionprops(labeled_region[0]):
+                # Extraer las coordenadas de la región conectada
+                cont += 1
+                if cont == 1:
+                    continue
+                region_coords = region.coords
+                
+                # Asignar un nuevo label único a las regiones desconectadas
+                new_label = max_label + 1  # Asignar un nuevo label
+                max_label += 1  # Incrementar el máximo para evitar repetir etiquetas
+                
+                # Asignar el nuevo label a los píxeles de esta región desconectada
+                for coord in region_coords:
+                    y, x = coord
+                    labeled_array[y, x] = new_label
+        
+        # Paso 4: Devolver el arreglo con los labels reasignados
+        return labeled_array
+
+    def redefinition_trees(self, raster, return_trees=False):
+        # if canopy height is the same for multiple pixels,
+        # place the tree top in the center of mass of the pixel bounds
+        num_objects = self.tree_markers.max()
+        
+        yx = np.array(
+                ndimage.center_of_mass(
+                    raster, self.tree_markers, range(1, num_objects+1)
+                ), dtype=np.float32
+            ) + 0.5
+        
+        xy = np.array((yx[:, 1], yx[:, 0])).T
+
+        trees = [Point(*self._to_lonlat(xy[tidx, 0], xy[tidx, 1], self.resolution))
+                 for tidx in range(len(xy))]
+        self.define_trees_df()
+        if return_trees:
+            return np.array(trees, dtype=object), xy
+        else:
+            df = pd.DataFrame(np.array([trees, trees], dtype='object').T,
+                              dtype='object', columns=['top_cor', 'top'])
+            
+            self.trees = pd.concat([self.trees, df], ignore_index=True)
+            print("redefine tree_detection count ", len(self.trees))
 
         self._check_empty()
 
@@ -585,7 +681,7 @@ class PyCrown:
         algorithm :  str
                      crown delineation algorithm to be used, choose from:
                      ['dalponte_cython', 'dalponte_numba',
-                      'dalponteCIRC_numba', 'watershed_skimage']
+                      'dalponteCIRC_numba', 'watershed_skimage', 'slic_skimage']
         loc :        str, optional
                      tree seed position: `top` or `top_cor`
         th_seed :    float
@@ -596,6 +692,8 @@ class PyCrown:
                      minimum height of tree seed (in m)
         max_crown :  float
                      maximum radius of tree crown (in m)
+        n_segments: int
+                    number of segmets for algorithm slic (all others but th_tree are ignored)
 
         Returns
         -------
@@ -655,8 +753,18 @@ class PyCrown:
                 inraster, th_tree=float(kwargs['th_tree'])
             )
             print(timeit.format(time.time() - tt))
-
+        elif algorithm == 'slic_skimage':
+            tt = time.time()
+            crowns = self._slic(
+                inraster, th_tree=float(kwargs['th_tree']), n_segments=int(kwargs['n_segments'])
+            )
+            crowns=self.reassign_disconnected_labels(crowns)
+            self.tree_markers = crowns
+            self.redefinition_trees(inraster)
+            print(timeit.format(time.time() - tt))
         self.crowns = np.array(crowns, dtype=np.int32)
+        if isinstance(self.crowns, np.ndarray) and algorithm != 'slic_skimage':
+            self._screen_crowns(self.condr)
 
     def clip_trees_to_bbox(self, bbox=None, inbuf=None, f_tiles=None, row=None,
                            col=None, loc='top'):
@@ -710,7 +818,8 @@ class PyCrown:
             (tree_lats >= lat_min) & (tree_lats < lat_max)
         )
         self.trees = self.trees[cond]
-
+        self.condr = cond
+        self.trees = self.trees.reset_index(drop=True)
         if isinstance(self.crowns, np.ndarray):
             self._screen_crowns(cond)
 
@@ -742,6 +851,7 @@ class PyCrown:
             col, row = self._to_colrow(tree['top'].x, tree['top'].y,
                                        self.resolution)
             rcindices = np.where(self.crowns == tidx + 1)
+            
             dtm_mean = np.nanmean(self.dtm[rcindices])
             dtm_std = np.nanstd(self.dtm[rcindices])
             dsm_max = np.nanmax(self.dsm[rcindices])
@@ -805,7 +915,7 @@ class PyCrown:
         """
         cond = self.trees[f'{loc}_height'] >= hmin
         self.trees = self.trees[cond]
-
+        self.trees = self.trees.reset_index(drop=True)
         if isinstance(self.crowns, np.ndarray):
             self._screen_crowns(cond)
 
@@ -817,8 +927,8 @@ class PyCrown:
         '''
         polys = []
         for feature in rioshapes(self.crowns, mask=self.crowns.astype(bool)):
-
             # Convert pixel coordinates to lon/lat
+            
             edges = feature[0]['coordinates'][0].copy()
             for i in range(len(edges)):
                 edges[i] = self._to_lonlat(*edges[i], self.resolution)
@@ -1100,4 +1210,5 @@ class PyCrown:
 
                 # Set the band description (optional)
                 dst.descriptions = (title,)
+
 

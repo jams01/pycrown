@@ -28,17 +28,18 @@ if __name__ == '__main__':
     PC.filter_chm(5, ws_in_pixels=True)
 
     # Tree Detection with local maximum filter
-    PC.tree_detection(PC.chm, ws=5, ws_in_pixels=True, hmin=16.)
+    PC.tree_detection(PC.chm, ws=7, ws_in_pixels=True, hmin=12.)
 
     # Clip trees to bounding box (no trees on image edge)
     # original extent: 1802140, 1802418, 5467295, 5467490
     # PC.clip_trees_to_bbox(bbox=(1802150, 1802408, 5467305, 5467480))
     # PC.clip_trees_to_bbox(bbox=(1802160, 1802400, 5467315, 5467470))
-    PC.clip_trees_to_bbox(inbuf=11)  # inward buffer of 11 metre
+    PC.clip_trees_to_bbox(inbuf=10)  # inward buffer of 10 metre
 
     # Crown Delineation
-    PC.crown_delineation(algorithm='dalponteCIRC_numba', th_tree=15.,
-                         th_seed=0.7, th_crown=0.55, max_crown=10.)
+    # watershed_skimage, dalponteCIRC_numba, slic_skimage(recommended)
+    PC.crown_delineation(algorithm='slic_skimage', th_tree=11.,
+                     th_seed=0.5, th_crown=0.4, max_crown=30., n_segments=200)
 
     # Correct tree tops on steep terrain
     PC.correct_tree_tops()
@@ -48,7 +49,7 @@ if __name__ == '__main__':
     PC.get_tree_height_elevation(loc='top_cor')
 
     # Screen small trees
-    PC.screen_small_trees(hmin=20., loc='top')
+    PC.screen_small_trees(hmin=2., loc='top')
 
     # Convert raster crowns to polygons
     PC.crowns_to_polys_raster()
@@ -68,3 +69,4 @@ if __name__ == '__main__':
 
     print(f"Number of trees detected: {len(PC.trees)}")
     print(f'Processing time: {TEND-TSTART} [HH:MM:SS]')
+
