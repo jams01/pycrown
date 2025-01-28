@@ -70,13 +70,14 @@ class PyCrown:
     __copyright__ = "Copyright 2018, Jan Zörner"
     __credits__ = ["Jan Zörner", "John Dymond", "James Shepherd", "Ben Jolly"]
     __license__ = "GNU GPLv3"
-    __version__ = "0.1"
+    __version__ = "0.2"
     __maintainer__ = "Jan Zörner"
     __email__ = "zoernerj@landcareresearch.co.nz"
     __status__ = "Development"
+    __modifiedby__ = "Dr Jonathan Monsalve 2025"
 
     def __init__(self, chm_file, dtm_file, dsm_file, las_file=None,
-                 outpath=None, suffix=None):
+                 outpath=None, suffix=None, vegetation_maks_path=None, resolution=None):
         """ PyCrown class
 
         Parameters
@@ -119,7 +120,7 @@ class PyCrown:
         suffix = f'_{suffix}' if suffix else ''
 
         self.outpath = Path(outpath) if outpath else Path('./')
-
+        self.vegetation_maks_path = vegetation_maks_path
         # Load the CHM
         self.chm_file = Path(chm_file)
         try:
@@ -130,7 +131,11 @@ class PyCrown:
         self.epsg = int(proj.GetAttrValue('AUTHORITY', 1))
         self.srs = from_epsg(self.epsg)
         self.geotransform = chm_gdal.GetGeoTransform()
-        self.resolution = abs(self.geotransform[-1])
+        if resolution is None:
+            self.resolution = abs(self.geotransform[-1])
+        else:
+            self.resolution = resolution
+        print("resolution", self.resolution)
         self.ul_lon = chm_gdal.GetGeoTransform()[0]
         self.ul_lat = chm_gdal.GetGeoTransform()[3]
         try:
@@ -362,11 +367,21 @@ class PyCrown:
         ndarray
             raster of individual tree crowns
         """
+        
         inraster_mask = inraster.copy()
         inraster_mask[inraster <= th_tree] = 0
+        
+        if self.vegetation_maks_path is not None:
+            with rasterio.open(self.vegetation_maks_path) as src:
+                vegetation_mask = src.read(1)  # Read the first band
+                vegetation_meta = src.meta.copy()
+            if vegetation_mask.shape != inraster_mask.shape:
+                raise ValueError("Shapes of vegetation mask and inraster_mask do not match.")
+            # Combine the masks using logical AND
+            inraster_mask = (inraster_mask) * ((vegetation_mask > 0)*1.0)
         raster = inraster.copy()
         raster[np.isnan(raster)] = 0.
-        labels = watershed(-raster, self.tree_markers, mask=inraster_mask)
+        labels = watershed(-raster, self.tree_markers, mask=combined_mask)
         return labels
 
     def _slic(self, inraster, th_tree=15., n_segments=300):
@@ -386,9 +401,41 @@ class PyCrown:
         """
         inraster_mask = inraster.copy()
         inraster_mask[inraster <= th_tree] = 0
+        if self.vegetation_maks_path is not None:
+            with rasterio.open(self.vegetation_maks_path) as src:
+                vegetation_mask = src.read(1)  # Read the first band
+                vegetation_meta = src.meta.copy()
+            if vegetation_mask.shape != inraster_mask.shape:
+                raise ValueError("Shapes of vegetation mask and inraster_mask do not match.")
+            # Combine the masks using logical AND
+            inraster_mask = (inraster_mask) * ((vegetation_mask > 0)*1.0)
         raster = inraster.copy()
         raster[np.isnan(raster)] = 0.
-        labels = slic(raster, n_segments=n_segments, mask=inraster_mask, channel_axis=None)
+        labels = slic(raster, n_segments=n_segments, compactness=10,mask=inraster_mask, channel_axis=None)
+        return labels
+    def _felzenszwalb(self, inraster, th_tree=15.):
+        """ Simple implementation of a felzenszwalb tree crown delineation
+
+        Parameters
+        ----------
+        inraster :   ndarray
+                     raster of height values (e.g., CHM)
+        th_tree :    float
+                     minimum height of tree crown
+
+        Returns
+        -------
+        ndarray
+            raster of individual tree crowns
+        """
+        inraster_mask = inraster.copy()
+        inraster_mask[inraster <= th_tree] = 0
+        raster = inraster.copy()
+        raster[np.isnan(raster)] = 0.
+        raster1 = raster * ((inraster_mask>0)*1.0)
+        labels = quickshift(raster1, kernel_size=3, max_dist=6, ratio=0.5, channel_axis=None)
+        plt.imshow(labels)
+        plt.show()
         return labels
 
     def _screen_crowns(self, cond):
@@ -673,6 +720,39 @@ class PyCrown:
 
         self._check_empty()
 
+    def region_size_filter(self, min_size):
+        """
+        Generates a binary vector indicating whether each region in a labeled image
+        is larger than a given pixel threshold. and then remove it
+        
+        Parameters:
+            labeled_image (numpy.ndarray): A 2D array where each unique positive integer
+                                        represents a region label (1 to N).
+            min_size (int): The minimum size (in pixels) a region must have to be marked as valid.
+        
+        Returns:
+            numpy.ndarray: A binary vector of size N (number of regions), where each entry is:
+                        - 1 if the corresponding region is larger than `min_size`.
+                        - 0 otherwise.
+        """
+        # Get the unique region labels and their sizes
+        region_labels, region_sizes = np.unique(self.crowns, return_counts=True)
+        
+        # Exclude the background (label 0) if present
+        if region_labels[0] == 0:
+            region_labels = region_labels[1:]
+            region_sizes = region_sizes[1:]
+        
+        # Generate the binary vector
+        binary_vector = (region_sizes > min_size).astype(int)
+        print("bin ",len(binary_vector))
+        print("crowns ",self.crowns.max())
+        if isinstance(self.crowns, np.ndarray):
+                self._screen_crowns(binary_vector)
+        self.tree_markers = self.crowns
+        self.redefinition_trees(self.crowns)
+        print("crowns 2 ",self.crowns.max())
+
     def crown_delineation(self, algorithm, loc='top', **kwargs):
         """ Function calling external crown delineation algorithms
 
@@ -681,7 +761,7 @@ class PyCrown:
         algorithm :  str
                      crown delineation algorithm to be used, choose from:
                      ['dalponte_cython', 'dalponte_numba',
-                      'dalponteCIRC_numba', 'watershed_skimage', 'slic_skimage']
+                      'dalponteCIRC_numba', 'watershed_skimage', 'slic_skimage', 'felzenszwalb_skimage']
         loc :        str, optional
                      tree seed position: `top` or `top_cor`
         th_seed :    float
@@ -762,7 +842,19 @@ class PyCrown:
             self.tree_markers = crowns
             self.redefinition_trees(inraster)
             print(timeit.format(time.time() - tt))
+        elif algorithm == 'felzenszwalb_skimage':
+            tt = time.time()
+            crowns = self._felzenszwalb(
+                inraster, th_tree=float(kwargs['th_tree'])
+            )
+            crowns=self.reassign_disconnected_labels(crowns)
+            self.tree_markers = crowns
+            self.redefinition_trees(inraster)
+            print(timeit.format(time.time() - tt))
         self.crowns = np.array(crowns, dtype=np.int32)
+        # arbol más grande que 0.5m2
+        pixels = int(0.5/self.resolution**2) 
+        self.region_size_filter(pixels)
         if isinstance(self.crowns, np.ndarray) and algorithm != 'slic_skimage':
             self._screen_crowns(self.condr)
 
@@ -1147,7 +1239,7 @@ class PyCrown:
                 
                 # Write the feature to the shapefile
                 output.write(feat)
-
+    
     def export_raster(self, raster, fname, title, res=None):
         """ Write array to raster file with gdal
 
@@ -1210,5 +1302,4 @@ class PyCrown:
 
                 # Set the band description (optional)
                 dst.descriptions = (title,)
-
 
