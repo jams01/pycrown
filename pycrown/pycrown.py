@@ -36,6 +36,7 @@ from osgeo import osr
 from shapely.geometry import mapping, Point, Polygon, GeometryCollection, LineString, Point
 
 from rasterio.features import shapes as rioshapes
+from rasterio.mask import mask
 
 import fiona
 from fiona.crs import from_epsg
@@ -65,7 +66,6 @@ class GDALFileNotFoundException(Exception):
 
 
 class PyCrown:
-
     __author__ = "Dr. Jan Zörner"
     __copyright__ = "Copyright 2018, Jan Zörner"
     __credits__ = ["Jan Zörner", "John Dymond", "James Shepherd", "Ben Jolly"]
@@ -146,7 +146,6 @@ class PyCrown:
                 self.chm0 = src.read(1)
         chm_gdal = None
 
-
         # Load the DTM
         try:
             self.dtm_file = Path(dtm_file)
@@ -159,7 +158,6 @@ class PyCrown:
             with rasterio.open(self.dtm_file) as src:
                 # Leer el raster como un array de NumPy
                 self.dtm = src.read(1)
-        
         dtm_gdal = None
 
         # Load the DSM
@@ -167,8 +165,8 @@ class PyCrown:
             self.dsm_file = Path(dsm_file)
         except RuntimeError as e:
             raise IOError(e)
-        
-        #self.dsm = dsm_gdal.GetRasterBand(1).ReadAsArray()
+
+        # self.dsm = dsm_gdal.GetRasterBand(1).ReadAsArray()
         try:
             dsm_gdal = gdal.Open(str(self.dsm_file), gdal.GA_ReadOnly)
             self.dsm = dsm_gdal.GetRasterBand(1).ReadAsArray()
@@ -190,6 +188,7 @@ class PyCrown:
         self.tt_corrected = None
 
         self.define_trees_df()
+
     def define_trees_df(self):
         self.trees = pd.DataFrame(columns=[
             'top_height', 'top_elevation',
@@ -209,6 +208,7 @@ class PyCrown:
             'top': 'object',
             'tt_corrected': 'int'
         })
+
     def _load_lidar_points_cloud(self, fname):
         """ Loads LiDAR dataset
 
@@ -222,8 +222,8 @@ class PyCrown:
             points = las.read()
             # Convertir los datos a un array de numpy
             lidar_points = np.array((
-            points.x, points.y, points.z, points.intensity, points.return_number,
-            points.classification
+                points.x, points.y, points.z, points.intensity, points.return_number,
+                points.classification
             )).transpose()
             # Crear un DataFrame de pandas
             colnames = ['x', 'y', 'z', 'intensity', 'return_num', 'classification']
@@ -331,7 +331,6 @@ class PyCrown:
         lats = np.array([tree[1][loc].y for tree in self.trees.iterrows()])
         return lons, lats
 
-
     def _tree_colrow(self, loc, resolution):
         """ returns column/row of tree tops
 
@@ -351,7 +350,6 @@ class PyCrown:
                                np.array([tree.y for tree in self.trees[loc]]),
                                resolution).astype(np.int32)
 
-
     def _watershed(self, inraster, th_tree=15.):
         """ Simple implementation of a watershed tree crown delineation
 
@@ -367,10 +365,10 @@ class PyCrown:
         ndarray
             raster of individual tree crowns
         """
-        
+
         inraster_mask = inraster.copy()
         inraster_mask[inraster <= th_tree] = 0
-        
+
         if self.vegetation_maks_path is not None:
             with rasterio.open(self.vegetation_maks_path) as src:
                 vegetation_mask = src.read(1)  # Read the first band
@@ -378,7 +376,7 @@ class PyCrown:
             if vegetation_mask.shape != inraster_mask.shape:
                 raise ValueError("Shapes of vegetation mask and inraster_mask do not match.")
             # Combine the masks using logical AND
-            inraster_mask = (inraster_mask) * ((vegetation_mask > 0)*1.0)
+            inraster_mask = (inraster_mask) * ((vegetation_mask > 0) * 1.0)
         raster = inraster.copy()
         raster[np.isnan(raster)] = 0.
         labels = watershed(-raster, self.tree_markers, mask=combined_mask)
@@ -408,11 +406,12 @@ class PyCrown:
             if vegetation_mask.shape != inraster_mask.shape:
                 raise ValueError("Shapes of vegetation mask and inraster_mask do not match.")
             # Combine the masks using logical AND
-            inraster_mask = (inraster_mask) * ((vegetation_mask > 0)*1.0)
+            inraster_mask = (inraster_mask) * ((vegetation_mask > 0) * 1.0)
         raster = inraster.copy()
         raster[np.isnan(raster)] = 0.
-        labels = slic(raster, n_segments=n_segments, compactness=10,mask=inraster_mask, channel_axis=None)
+        labels = slic(raster, n_segments=n_segments, compactness=10, mask=inraster_mask, channel_axis=None)
         return labels
+
     def _felzenszwalb(self, inraster, th_tree=15.):
         """ Simple implementation of a felzenszwalb tree crown delineation
 
@@ -432,7 +431,7 @@ class PyCrown:
         inraster_mask[inraster <= th_tree] = 0
         raster = inraster.copy()
         raster[np.isnan(raster)] = 0.
-        raster1 = raster * ((inraster_mask>0)*1.0)
+        raster1 = raster * ((inraster_mask > 0) * 1.0)
         labels = quickshift(raster1, kernel_size=3, max_dist=6, ratio=0.5, channel_axis=None)
         plt.imshow(labels)
         plt.show()
@@ -472,8 +471,8 @@ class PyCrown:
             filter kernel
         """
         if circular:
-            y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
-            return x**2 + y**2 <= radius**2
+            y, x = np.ogrid[-radius:radius + 1, -radius:radius + 1]
+            return x ** 2 + y ** 2 <= radius ** 2
         else:
             return np.ones((int(radius), int(radius)))
 
@@ -493,6 +492,7 @@ class PyCrown:
 
         Returns
         -------
+
         ndarray
             smoothed raster
         """
@@ -520,10 +520,10 @@ class PyCrown:
         self.dtm = self.dtm[row_min:row_max, col_min:col_max]
         self.dsm = self.dsm[row_min:row_max, col_min:col_max]
         lasmask = (
-            (self.las.x >= lon_min - las_offset) &
-            (self.las.x <= lon_max + las_offset) &
-            (self.las.y >= lat_min - las_offset) &
-            (self.las.y <= lat_max + las_offset)
+                (self.las.x >= lon_min - las_offset) &
+                (self.las.x <= lon_max + las_offset) &
+                (self.las.y >= lat_min - las_offset) &
+                (self.las.y <= lat_max + las_offset)
         )
         self.las = self.las[lasmask]
 
@@ -560,7 +560,8 @@ class PyCrown:
         '''
         if not ws_in_pixels:
             if ws % self.resolution:
-                raise Exception("Image filter size not an integer number. Please check if image resolution matches filter size (in metre or pixel).")
+                raise Exception(
+                    "Image filter size not an integer number. Please check if image resolution matches filter size (in metre or pixel).")
             else:
                 ws = int(ws / self.resolution)
 
@@ -606,7 +607,8 @@ class PyCrown:
 
         if not ws_in_pixels:
             if ws % resolution:
-                raise Exception("Image filter size not an integer number. Please check if image resolution matches filter size (in metre or pixel).")
+                raise Exception(
+                    "Image filter size not an integer number. Please check if image resolution matches filter size (in metre or pixel).")
             else:
                 ws = int(ws / resolution)
 
@@ -622,11 +624,10 @@ class PyCrown:
 
         # remove tree tops lower than minimum height
         tree_maxima[raster <= hmin] = 0
-        #distance = ndimage.distance_transform_edt(tree_maxima)
-        #separated_maxima = (distance == filters.maximum_filter(distance, size=3))
+        # distance = ndimage.distance_transform_edt(tree_maxima)
+        # separated_maxima = (distance == filters.maximum_filter(distance, size=3))
         # label each tree
         self.tree_markers, num_objects = ndimage.label(tree_maxima)
-        
 
         if num_objects == 0:
             raise NoTreesException
@@ -634,10 +635,10 @@ class PyCrown:
         # if canopy height is the same for multiple pixels,
         # place the tree top in the center of mass of the pixel bounds
         yx = np.array(
-                ndimage.center_of_mass(
-                    raster, self.tree_markers, range(1, num_objects+1)
-                ), dtype=np.float32
-            ) + 0.5
+            ndimage.center_of_mass(
+                raster, self.tree_markers, range(1, num_objects + 1)
+            ), dtype=np.float32
+        ) + 0.5
         xy = np.array((yx[:, 1], yx[:, 0])).T
 
         trees = [Point(*self._to_lonlat(xy[tidx, 0], xy[tidx, 1], resolution))
@@ -648,7 +649,7 @@ class PyCrown:
         else:
             df = pd.DataFrame(np.array([trees, trees], dtype='object').T,
                               dtype='object', columns=['top_cor', 'top'])
-            
+
             self.trees = pd.concat([self.trees, df], ignore_index=True)
             print("len tree_detection", len(self.trees))
 
@@ -657,39 +658,39 @@ class PyCrown:
     def reassign_disconnected_labels(self, crowns):
         # Paso 1: Crear una copia del array de crowns para modificarlo sin alterar el original
         labeled_array = np.copy(crowns)
-        
+
         # Paso 2: Inicializar el máximo de etiquetas actuales en crowns
         max_label = np.max(crowns)
-        
+
         # Paso 3: Procesar cada label individualmente
         for current_label in np.unique(crowns):
             if current_label == 0:  # Ignorar el fondo (etiqueta 0)
                 continue
-            
+
             # Paso 3.1: Extraer la región que corresponde al label actual
             region_mask = (crowns == current_label)
-            
+
             # Paso 3.2: Etiquetar los componentes conectados dentro de la región actual
             labeled_region = label(region_mask)
-            #print(labeled_region[0])
+            # print(labeled_region[0])
             # Paso 3.3: Obtener las propiedades de las regiones conectadas
-            cont=0
+            cont = 0
             for region in regionprops(labeled_region[0]):
                 # Extraer las coordenadas de la región conectada
                 cont += 1
                 if cont == 1:
                     continue
                 region_coords = region.coords
-                
+
                 # Asignar un nuevo label único a las regiones desconectadas
                 new_label = max_label + 1  # Asignar un nuevo label
                 max_label += 1  # Incrementar el máximo para evitar repetir etiquetas
-                
+
                 # Asignar el nuevo label a los píxeles de esta región desconectada
                 for coord in region_coords:
                     y, x = coord
                     labeled_array[y, x] = new_label
-        
+
         # Paso 4: Devolver el arreglo con los labels reasignados
         return labeled_array
 
@@ -697,13 +698,13 @@ class PyCrown:
         # if canopy height is the same for multiple pixels,
         # place the tree top in the center of mass of the pixel bounds
         num_objects = self.tree_markers.max()
-        
+
         yx = np.array(
-                ndimage.center_of_mass(
-                    raster, self.tree_markers, range(1, num_objects+1)
-                ), dtype=np.float32
-            ) + 0.5
-        
+            ndimage.center_of_mass(
+                raster, self.tree_markers, range(1, num_objects + 1)
+            ), dtype=np.float32
+        ) + 0.5
+
         xy = np.array((yx[:, 1], yx[:, 0])).T
 
         trees = [Point(*self._to_lonlat(xy[tidx, 0], xy[tidx, 1], self.resolution))
@@ -714,7 +715,7 @@ class PyCrown:
         else:
             df = pd.DataFrame(np.array([trees, trees], dtype='object').T,
                               dtype='object', columns=['top_cor', 'top'])
-            
+
             self.trees = pd.concat([self.trees, df], ignore_index=True)
             print("redefine tree_detection count ", len(self.trees))
 
@@ -724,12 +725,12 @@ class PyCrown:
         """
         Generates a binary vector indicating whether each region in a labeled image
         is larger than a given pixel threshold. and then remove it
-        
+
         Parameters:
             labeled_image (numpy.ndarray): A 2D array where each unique positive integer
                                         represents a region label (1 to N).
             min_size (int): The minimum size (in pixels) a region must have to be marked as valid.
-        
+
         Returns:
             numpy.ndarray: A binary vector of size N (number of regions), where each entry is:
                         - 1 if the corresponding region is larger than `min_size`.
@@ -737,21 +738,21 @@ class PyCrown:
         """
         # Get the unique region labels and their sizes
         region_labels, region_sizes = np.unique(self.crowns, return_counts=True)
-        
+
         # Exclude the background (label 0) if present
         if region_labels[0] == 0:
             region_labels = region_labels[1:]
             region_sizes = region_sizes[1:]
-        
+
         # Generate the binary vector
         binary_vector = (region_sizes > min_size).astype(int)
-        print("bin ",len(binary_vector))
-        print("crowns ",self.crowns.max())
+        print("bin ", len(binary_vector))
+        print("crowns ", self.crowns.max())
         if isinstance(self.crowns, np.ndarray):
-                self._screen_crowns(binary_vector)
+            self._screen_crowns(binary_vector)
         self.tree_markers = self.crowns
         self.redefinition_trees(self.crowns)
-        print("crowns 2 ",self.crowns.max())
+        print("crowns 2 ", self.crowns.max())
 
     def crown_delineation(self, algorithm, loc='top', **kwargs):
         """ Function calling external crown delineation algorithms
@@ -838,7 +839,7 @@ class PyCrown:
             crowns = self._slic(
                 inraster, th_tree=float(kwargs['th_tree']), n_segments=int(kwargs['n_segments'])
             )
-            crowns=self.reassign_disconnected_labels(crowns)
+            crowns = self.reassign_disconnected_labels(crowns)
             self.tree_markers = crowns
             self.redefinition_trees(inraster)
             print(timeit.format(time.time() - tt))
@@ -847,13 +848,13 @@ class PyCrown:
             crowns = self._felzenszwalb(
                 inraster, th_tree=float(kwargs['th_tree'])
             )
-            crowns=self.reassign_disconnected_labels(crowns)
+            crowns = self.reassign_disconnected_labels(crowns)
             self.tree_markers = crowns
             self.redefinition_trees(inraster)
             print(timeit.format(time.time() - tt))
         self.crowns = np.array(crowns, dtype=np.int32)
         # arbol más grande que 0.5m2
-        pixels = int(0.5/self.resolution**2) 
+        pixels = int(0.5 / self.resolution ** 2)
         self.region_size_filter(pixels)
         if isinstance(self.crowns, np.ndarray) and algorithm != 'slic_skimage':
             self._screen_crowns(self.condr)
@@ -906,8 +907,8 @@ class PyCrown:
 
         tree_lons, tree_lats = self._tree_lonlat(loc)
         cond = (
-            (tree_lons >= lon_min) & (tree_lons < lon_max) &
-            (tree_lats >= lat_min) & (tree_lats < lat_max)
+                (tree_lons >= lon_min) & (tree_lons < lon_max) &
+                (tree_lats >= lat_min) & (tree_lats < lat_max)
         )
         self.trees = self.trees[cond]
         self.condr = cond
@@ -943,7 +944,7 @@ class PyCrown:
             col, row = self._to_colrow(tree['top'].x, tree['top'].y,
                                        self.resolution)
             rcindices = np.where(self.crowns == tidx + 1)
-            
+
             dtm_mean = np.nanmean(self.dtm[rcindices])
             dtm_std = np.nanstd(self.dtm[rcindices])
             dsm_max = np.nanmax(self.dsm[rcindices])
@@ -1020,7 +1021,7 @@ class PyCrown:
         polys = []
         for feature in rioshapes(self.crowns, mask=self.crowns.astype(bool)):
             # Convert pixel coordinates to lon/lat
-            
+
             edges = feature[0]['coordinates'][0].copy()
             for i in range(len(edges)):
                 edges[i] = self._to_lonlat(*edges[i], self.resolution)
@@ -1107,18 +1108,18 @@ class PyCrown:
             header = laspy.LasHeader(point_format=3, version="1.4")
             self.outpath.mkdir(parents=True, exist_ok=True)
             with laspy.open(self.outpath / "trees.las", mode="w", header=header) as outfile:
-               # Compute the minimum values for offsets
-               xmin = np.floor(np.min(lidar_in_crowns.x))
-               ymin = np.floor(np.min(lidar_in_crowns.y))
-               zmin = np.floor(np.min(lidar_in_crowns.z))
-               # Set the header offsets and scales
-               outfile.header.offset = [xmin, ymin, zmin]
-               outfile.header.scale = [0.001, 0.001, 0.001]
-               # Create the point records
-               outfile.x = lidar_in_crowns.x
-               outfile.y = lidar_in_crowns.y
-               outfile.z = lidar_in_crowns.z
-               outfile.intensity = lidar_tree_class
+                # Compute the minimum values for offsets
+                xmin = np.floor(np.min(lidar_in_crowns.x))
+                ymin = np.floor(np.min(lidar_in_crowns.y))
+                zmin = np.floor(np.min(lidar_in_crowns.z))
+                # Set the header offsets and scales
+                outfile.header.offset = [xmin, ymin, zmin]
+                outfile.header.scale = [0.001, 0.001, 0.001]
+                # Create the point records
+                outfile.x = lidar_in_crowns.x
+                outfile.y = lidar_in_crowns.y
+                outfile.z = lidar_in_crowns.z
+                outfile.intensity = lidar_tree_class
 
         self.lidar_in_crowns = lidar_in_crowns
 
@@ -1135,9 +1136,9 @@ class PyCrown:
             self.trees.tt_corrected = np.zeros(len(self.trees), dtype=int)
         else:
             cond = (
-                (self.trees.tt_corrected >= 0) &
-                self.trees.crown_poly_raster.apply(
-                    lambda x: isinstance(x, Polygon))
+                    (self.trees.tt_corrected >= 0) &
+                    self.trees.crown_poly_raster.apply(
+                        lambda x: isinstance(x, Polygon))
             )
             self.trees = self.trees[cond]
 
@@ -1162,7 +1163,7 @@ class PyCrown:
             'properties': {'DN': 'int', 'TH': 'float', 'COR': 'int'}
         }
         with fiona.collection(
-            str(outfile), 'w', 'ESRI Shapefile', schema, crs=self.srs
+                str(outfile), 'w', 'ESRI Shapefile', schema, crs=self.srs
         ) as output:
             for tidx in range(len(self.trees)):
                 feat = {}
@@ -1201,14 +1202,14 @@ class PyCrown:
             for tidx in range(len(self.trees)):
                 feat = {}
                 tree = self.trees.iloc[tidx]
-                
+
                 # Check and fix the geometry if needed
                 geometry = tree[crowntype]
                 if isinstance(geometry, GeometryCollection):
                     if len(geometry.geoms) > 0:
                         # Extract the first Polygon geometry from the GeometryCollection
-                        #print(geometry.geoms)
-                        #geometry = geometry.geoms[0]  # Or handle as needed (e.g., take all polygons)
+                        # print(geometry.geoms)
+                        # geometry = geometry.geoms[0]  # Or handle as needed (e.g., take all polygons)
                         for geom in geometry.geoms:
                             feat['geometry'] = mapping(geom)
                             feat['properties'] = {
@@ -1216,7 +1217,7 @@ class PyCrown:
                                 'TTH': float(tree.top_height),
                                 'TCH': float(tree.top_cor_height)
                             }
-                            
+
                             # Write the feature to the shapefile
                             output.write(feat)
                         continue
@@ -1228,7 +1229,7 @@ class PyCrown:
                     geometry = geometry.buffer(0.01)  # Adjust the buffer size as needed
                 if isinstance(geometry, Point):
                     geometry = geometry.buffer(0.5)
-                
+
                 # Prepare feature with geometry and properties
                 feat['geometry'] = mapping(geometry)
                 feat['properties'] = {
@@ -1236,10 +1237,98 @@ class PyCrown:
                     'TTH': float(tree.top_height),
                     'TCH': float(tree.top_cor_height)
                 }
-                
+
                 # Write the feature to the shapefile
                 output.write(feat)
-    
+
+    def export_tree_indexes(self, ndvi_file, savi_file, evi_file, reci_file, gndvi_file):
+
+        ndvi_raster = rasterio.open(ndvi_file)
+        savi_raster = rasterio.open(savi_file)
+        evi_raster = rasterio.open(evi_file)
+        reci_raster = rasterio.open(reci_file)
+        gndvi_raster = rasterio.open(gndvi_file)
+
+        # indexes per tree
+        loc = 'top'
+        crowntype = 'crown_poly_raster'
+
+        indexes = []
+        for tidx in range(len(self.trees)):
+            tree = self.trees.iloc[tidx]
+
+            geometry = tree[crowntype]
+
+            if isinstance(geometry, GeometryCollection):
+                if len(geometry.geoms) > 0:
+                    # Extract the first Polygon geometry from the GeometryCollection
+                    # print(geometry.geoms)
+                    # geometry = geometry.geoms[0]  # Or handle as needed (e.g., take all polygons)
+                    geometry_ = []
+                    for geom in geometry.geoms:
+                        geometry_.append(mapping(geom))
+                    geometry = geometry_
+                    continue
+                else:
+                    # Handle case where the GeometryCollection is empty
+                    continue  # Skip this tree or add handling logic as necessary.
+            elif isinstance(geometry, LineString):
+                # Convert LineString to Polygon using a small buffer
+                geometry = geometry.buffer(0.01)  # Adjust the buffer size as needed
+                geometry = [mapping(geometry)]
+            elif isinstance(geometry, Point):
+                geometry = geometry.buffer(0.5)
+                geometry = [mapping(geometry)]
+            else:
+                geometry = [geometry]
+
+            sum_ndvi = 0
+            sum_savi = 0
+            sum_evi = 0
+            sum_reci = 0
+            sum_gndvi = 0
+            for geometry_i in geometry:
+
+                # Mask the raster with the polygon
+                masked_raster_ndvi, transform = mask(ndvi_raster, [geometry_i], crop=True)
+                masked_raster_savi, transform = mask(savi_raster, [geometry_i], crop=True)
+                masked_raster_evi, transform = mask(evi_raster, [geometry_i], crop=True)
+                masked_raster_reci, transform = mask(reci_raster, [geometry_i], crop=True)
+                masked_raster_gndvi, transform = mask(gndvi_raster, [geometry_i], crop=True)
+
+                pixel_values = masked_raster_ndvi[0].flatten()
+                pixel_values = pixel_values[pixel_values != ndvi_raster.nodata]
+                sum_ndvi += np.median(pixel_values)
+
+                pixel_values = masked_raster_savi[0].flatten()
+                pixel_values = pixel_values[pixel_values != savi_raster.nodata]
+                sum_savi += np.median(pixel_values)
+
+                pixel_values = masked_raster_evi[0].flatten()
+                pixel_values = pixel_values[pixel_values != evi_raster.nodata]
+                sum_evi += np.median(pixel_values)
+
+                pixel_values = masked_raster_reci[0].flatten()
+                pixel_values = pixel_values[pixel_values != reci_raster.nodata]
+                sum_reci += np.median(pixel_values)
+
+                pixel_values = masked_raster_gndvi[0].flatten()
+                pixel_values = pixel_values[pixel_values != gndvi_raster.nodata]
+                sum_gndvi += np.median(pixel_values)
+
+            avg_ndvi = sum_ndvi / len(geometry)
+            avg_savi = sum_savi / len(geometry)
+            avg_evi = sum_evi / len(geometry)
+            avg_reci = sum_reci / len(geometry)
+            avg_gndvi = sum_gndvi / len(geometry)
+
+            dic_tidx = {"X": tree[loc].x, "Y": tree[loc].y, "Elevation": tree[f'{loc}_elevation'].item(),
+                        "ndvi": avg_ndvi.item(), "savi": avg_savi.item(), "evi": avg_evi.item(), "reci": avg_reci.item(),
+                        "gndvi": avg_gndvi.item()}
+            indexes.append(dic_tidx)
+
+        return indexes
+
     def export_raster(self, raster, fname, title, res=None):
         """ Write array to raster file with gdal
 
@@ -1282,17 +1371,18 @@ class PyCrown:
             title = 'trees'  # Band description
             epsg_code = self.epsg  # EPSG code for the coordinate system
             # Define the transform (upper-left corner and pixel size)
-            transform = from_origin(ul_lon, ul_lat, res, res)  # (upper left x, upper left y, pixel size x, pixel size y)
+            transform = from_origin(ul_lon, ul_lat, res,
+                                    res)  # (upper left x, upper left y, pixel size x, pixel size y)
             # Open a new GeoTIFF file for writing
             with rasterio.open(
-                f'{fname}', 'w', 
-                driver='GTiff', 
-                count=1, 
-                dtype='float32', 
-                width=raster.shape[1], 
-                height=raster.shape[0], 
-                crs=CRS.from_epsg(epsg_code),
-                transform=transform
+                    f'{fname}', 'w',
+                    driver='GTiff',
+                    count=1,
+                    dtype='float32',
+                    width=raster.shape[1],
+                    height=raster.shape[0],
+                    crs=CRS.from_epsg(epsg_code),
+                    transform=transform
             ) as dst:
                 # Write the array to the file
                 dst.write(raster, 1)  # 1 refers to the first band
@@ -1302,4 +1392,3 @@ class PyCrown:
 
                 # Set the band description (optional)
                 dst.descriptions = (title,)
-
