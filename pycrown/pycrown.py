@@ -1287,8 +1287,9 @@ class PyCrown:
             sum_evi = 0
             sum_reci = 0
             sum_gndvi = 0
+            perimeter = 0
+            area = 0
             for geometry_i in geometry:
-
                 # Mask the raster with the polygon
                 masked_raster_ndvi, transform = mask(ndvi_raster, [geometry_i], crop=True)
                 masked_raster_savi, transform = mask(savi_raster, [geometry_i], crop=True)
@@ -1298,23 +1299,25 @@ class PyCrown:
 
                 pixel_values = masked_raster_ndvi[0].flatten()
                 pixel_values = pixel_values[pixel_values != ndvi_raster.nodata]
-                sum_ndvi += np.median(pixel_values)
+                sum_ndvi += np.mean(pixel_values)
 
                 pixel_values = masked_raster_savi[0].flatten()
                 pixel_values = pixel_values[pixel_values != savi_raster.nodata]
-                sum_savi += np.median(pixel_values)
+                sum_savi += np.mean(pixel_values)
 
                 pixel_values = masked_raster_evi[0].flatten()
                 pixel_values = pixel_values[pixel_values != evi_raster.nodata]
-                sum_evi += np.median(pixel_values)
+                sum_evi += np.mean(pixel_values)
 
                 pixel_values = masked_raster_reci[0].flatten()
                 pixel_values = pixel_values[pixel_values != reci_raster.nodata]
-                sum_reci += np.median(pixel_values)
+                sum_reci += np.mean(pixel_values)
 
                 pixel_values = masked_raster_gndvi[0].flatten()
                 pixel_values = pixel_values[pixel_values != gndvi_raster.nodata]
-                sum_gndvi += np.median(pixel_values)
+                sum_gndvi += np.mean(pixel_values)
+                perimeter = geometry_i.length
+                area = geometry_i.area
 
             avg_ndvi = sum_ndvi / len(geometry)
             avg_savi = sum_savi / len(geometry)
@@ -1322,8 +1325,8 @@ class PyCrown:
             avg_reci = sum_reci / len(geometry)
             avg_gndvi = sum_gndvi / len(geometry)
 
-            dic_tidx = {"X": tree[loc].x, "Y": tree[loc].y, "Elevation": tree[f'{loc}_elevation'].item(),
-                        "ndvi": avg_ndvi.item(), "savi": avg_savi.item(), "evi": avg_evi.item(), "reci": avg_reci.item(),
+            dic_tidx = {"X": tree[loc].x, "Y": tree[loc].y, "Elevation": tree[f'{loc}_elevation'].item(), "Height": tree[f'{loc}_height'].item(),
+                        "perimetro": str(perimeter), "area": str(area),"ndvi": avg_ndvi.item(), "savi": avg_savi.item(), "evi": avg_evi.item(), "reci": avg_reci.item(),
                         "gndvi": avg_gndvi.item()}
             indexes.append(dic_tidx)
 
